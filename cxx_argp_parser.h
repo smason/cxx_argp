@@ -12,6 +12,7 @@
 
 #include <argp.h>
 
+#include <exception>
 #include <fstream>
 #include <functional>
 #include <limits>
@@ -21,73 +22,81 @@
 
 namespace cxx_argp
 {
+	using arg_parser = std::function<error_t(int key, const char *, struct argp_state *state)>;
+
 	/* for floating-point types */
 	template <typename T>
-	typename std::enable_if<
-	    std::is_floating_point<T>::value,
-	    std::function<bool(const char *)>>::type
+	typename std::enable_if<std::is_floating_point<T>::value, arg_parser>::type
 	make_check_function(T &x)
 	{
-		return [&x](const char *arg) {
-			char *end;
-			errno = 0;
-			const double v = strtod(arg, &end);
-			if (errno == 0 && *end == '\0') {
-				x = v;
-				return true;
+		return [&x](int, const char *arg, struct argp_state* state) {
+			try {
+				x = std::stod(arg);
+				return 0;
+			} catch(std::exception &err) {
+				argp_error(
+					state, "unable to interpret '%s' as a decimal, %s",
+					arg, err.what());
+				return -1;
 			}
-			return false;
 		};
 	}
 
 	/* for integers */
 	template <typename T>
-	typename std::enable_if<
-	    std::numeric_limits<T>::is_integer,
-	    std::function<bool(const char *)>>::type
+	typename std::enable_if<std::numeric_limits<T>::is_integer, arg_parser>::type
 	make_check_function(T &x)
 	{
-		return [&x](const char *arg) {
-			char *end;
-			errno = 0;
-			const long v = strtol(arg, &end, 0);
-			if (errno == 0 && *end == '\0') {
-				x = v;
-				return true;
+		return [&x](int, const char *arg, struct argp_state* state) {
+			try {
+				x = std::stol(arg);
+				return 0;
+			} catch(std::exception &err) {
+				argp_error(
+					state, "unable to interpret '%s' as a whole number, %s",
+					arg, err.what());
+				return -1;
 			}
-			return false;
 		};
 	}
 
 	/* specialised for std::strings */
-	inline std::function<bool(const char *)> make_check_function(std::string &x)
+	inline arg_parser make_check_function(std::string &x)
 	{
-		return [&x](const char *arg) { x = arg; return true; };
+		return [&x](int, const char *arg, struct argp_state*) { x = arg; return 0; };
 	}
 
 	/* specialised for file-streams */
-	inline std::function<bool(const char *)> make_check_function(std::ifstream &x)
+	inline arg_parser make_check_function(std::ifstream &x)
 	{
-		return [&x](const char *arg) {
+		return [&x](int, const char *arg, struct argp_state* state) {
 			x = std::ifstream{arg};
-			return x.good();
+			if (x.good()) {
+				return 0;
+			}
+			argp_error(state, "unable to open '%s'", arg);
+			return -1;
 		};
 	}
 
 	/* specialised for a pair of file-stream and its filename */
-	template<typename T>
-	std::function<bool(const char *)> make_check_function(std::pair<T, std::string> &x)
+	template <typename T>
+	inline arg_parser make_check_function(std::pair<T, std::string> &x)
 	{
-		return [&x](const char *arg) {
+		return [&x](int, const char *arg, struct argp_state* state) {
 			x = {T{arg}, arg};
-			return x.first.good();
+			if (x.first.good()) {
+				return 0;
+			}
+			argp_error(state, "unable to open '%s'", arg);
+			return -1;
 		};
 	}
 
 	/* specialised for vectors with string */
-	inline std::function<bool(const char *)> make_check_function(std::vector<std::string> &x)
+	inline arg_parser make_check_function(std::vector<std::string> &x)
 	{
-		return [&x](const char *arg) {
+		return [&x](int, const char *arg, struct argp_state*) {
 			std::stringstream s;
 			s.str(arg);
 			std::string val;
@@ -95,88 +104,98 @@ namespace cxx_argp
 			while (getline(s, val, ','))
 				x.push_back(val);
 
-			return true;
+			return 0;
 		};
 	}
 
 	/* specialised for vectors with integers */
 	template <typename T,
-	          typename = typename std::enable_if<std::is_arithmetic<T>::value, T>::type>
-	std::function<bool(const char *)> make_check_function(std::vector<T> &x)
+	          typename = typename std::enable_if<std::numeric_limits<T>::is_integer, T>::type>
+	arg_parser make_check_function(std::vector<T> &x)
 	{
-		return [&x](const char *arg) {
-			std::stringstream s;
-			s.str(arg);
+		return [&x](int, const char *arg, struct argp_state* state) {
+			std::stringstream s{arg};
 			std::string val;
-
 			while (getline(s, val, ',')) {
 				try {
-					x.push_back(std::stoi(val));
-				} catch (std::exception &e) {
-					return false;
+					x.push_back(std::stol(val));
+				} catch(std::exception &err) {
+					argp_error(
+						state, "unable to interpret '%s' as an integer, %s",
+						arg, err.what());
+					return -1;
 				}
 			}
-
-			return true;
+			return 0;
 		};
 	}
 
 	/* specialisation for bool -> set to true */
-	inline std::function<bool(const char *)> make_check_function(bool &x)
+	inline arg_parser make_check_function(bool &x)
 	{
-		return [&x](const char *) { x = true; return true; };
+		return [&x](int, const char *, struct argp_state*) { x = true; return 0; };
 	}
 
 class parser
 {
-	std::vector<argp_option> options_ = {{}};                 //< argp-option-vector
-	std::map<int, std::function<bool(const char *)>> convert_; //< conversion-function - from const char *arg to value
-	ssize_t expected_argument_count_ = 0;                      //< expected positional argument count (-1, unlimited)
-	std::vector<std::string> arguments_;                       //< positional arguments
-	std::map<int, size_t> counter_;
+	//< argp-option-vector
+	std::vector<argp_option> options_ = {{}};
+
+	//< conversion-function - from const char *arg to value
+	std::map<int, arg_parser> convert_;
+
+	//< expected positional argument count (-1, unlimited)
+	ssize_t expected_argument_count_ = 0;
+
+	//< positional arguments
+	std::vector<std::string> arguments_;
+
 	unsigned flags_ = 0;
 
 
 	//! argp-callback
-	static error_t parseoptions_(int key, char *arg, struct argp_state *state)
+	static error_t parseoptions_cb_(int key, char *arg, struct argp_state *state)
 	{
-		auto *parser = reinterpret_cast<cxx_argp::parser *>(state->input);
+		return reinterpret_cast<cxx_argp::parser *>(state->input)
+			->parseoptions_(key, arg, state);
+	}
 
-		auto option = parser->convert_.find(key);
+protected:
+	void add_option_(const argp_option &o)
+	{
+		options_.insert(options_.end() - 1, o);
+	}
 
-		if (option != parser->convert_.end()) {
-			parser->counter_[key]++;
-			if (!option->second(arg)) {
-				argp_error(state, "argument '%s' not usable for '%c'", arg, key);
-				return -1;
+	virtual error_t parseoptions_(int key, char *arg, struct argp_state *state)
+	{
+		switch (key) {
+		case ARGP_KEY_INIT:
+			arguments_.clear();
+			break;
+
+		case ARGP_KEY_ARG:
+			arguments_.push_back(arg);
+			break;
+
+		case ARGP_KEY_END:
+			if (expected_argument_count_ == -1)
+				break;
+
+			if (arguments_.size() > (size_t) expected_argument_count_)
+				argp_failure(state, 1, 0, "too many arguments given");
+			else if (arguments_.size() < (size_t) expected_argument_count_)
+				argp_failure(state, 1, 0, "too few arguments given");
+			break;
+
+		case ARGP_KEY_ERROR:
+			break;
+
+		default: {
+			auto option = convert_.find(key);
+			if (option != convert_.end()) {
+				return option->second(key, arg, state);
 			}
-		} else { /* argp-argument handler */
-			switch (key) {
-			case ARGP_KEY_INIT:
-				parser->arguments_.clear();
-				break;
-
-			case ARGP_KEY_ARG:
-				parser->arguments_.push_back(arg);
-				break;
-
-			case ARGP_KEY_END:
-				if (parser->expected_argument_count_ == -1)
-					break;
-
-				if (parser->arguments_.size() > (size_t) parser->expected_argument_count_)
-					argp_failure(state, 1, 0, "too many arguments given");
-				else if (parser->arguments_.size() < (size_t) parser->expected_argument_count_)
-					argp_failure(state, 1, 0, "too few arguments given");
-				break;
-
-			case ARGP_KEY_ERROR:
-				break;
-
-			default:
-				break;
-			}
-		}
+		}}
 
 		return 0;
 	}
@@ -193,17 +212,16 @@ public:
 	}
 
 	void add_option(const argp_option &o,
-	                const std::function<bool(const char *)> &&custom)
+	                const arg_parser &&custom)
 	{
-		options_.insert(options_.end() - 1, o);
+		add_option_(o);
 		convert_.insert(std::make_pair(o.key, custom));
-		counter_.insert(std::make_pair(o.key, 0));
 	}
 
 	// processes arguments with argp_parse and evaluate standarda arguments
 	bool parse(int argc, char *argv[], const char *usage = "", const char *doc = nullptr)
 	{
-		struct argp argp = {options_.data(), parser::parseoptions_, usage, doc};
+		struct argp argp = {options_.data(), parser::parseoptions_cb_, usage, doc};
 
 		int ret = argp_parse(&argp, argc, argv, flags_, nullptr, this);
 
