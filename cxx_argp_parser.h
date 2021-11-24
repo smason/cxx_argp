@@ -196,8 +196,11 @@ protected:
 	}
 
 public:
-	parser(size_t expected_argument_count = 0)
-	    : expected_argument_count_(expected_argument_count) {}
+	bool help_via_argp_flags;
+
+	parser(size_t expected_argument_count = 0) :
+		expected_argument_count_(expected_argument_count),
+		help_via_argp_flags{true} {}
 
 	// add an argp-option to the options we care about
 	template <typename T>
@@ -236,18 +239,21 @@ public:
 		if (flags_ & ARGP_NO_ERRS)
 			return true;
 
+		const bool help_disabled = help_via_argp_flags && (flags_ & ARGP_NO_HELP);
+
 		if (ret != 0) {
-			if (!(flags_ & ARGP_NO_HELP))
+			if (!help_disabled)
 				argp_help(&argp, stderr, ARGP_HELP_USAGE, argv[0]);
 			return false;
 		}
 
 		if (expected_argument_count_ != -1 &&
 		    (size_t) expected_argument_count_ != arguments_.size()) {
-			if (!(flags_ & ARGP_NO_HELP))
+			if (!help_disabled)
 				argp_help(&argp, stderr, ARGP_HELP_USAGE, argv[0]);
 			return false;
 		}
+
 		return true;
 	}
 
