@@ -21,20 +21,6 @@
 
 namespace cxx_argp
 {
-
-class parser
-{
-	std::vector<argp_option> options_ = {{}};                 //< argp-option-vector
-	std::map<int, std::function<bool(const char *)>> convert_; //< conversion-function - from const char *arg to value
-	ssize_t expected_argument_count_ = 0;                      //< expected positional argument count (-1, unlimited)
-	std::vector<std::string> arguments_;                       //< positional arguments
-	std::map<int, size_t> counter_;
-	unsigned flags_ = 0;
-
-	/* C++11 magic (px = &x) for generating a function (lambda kept by std::function)
-	 * bound to a reference to an argument 'x'
-	 */
-
 	/* for floating-point types */
 	template <typename T>
 	typename std::enable_if<
@@ -42,14 +28,15 @@ class parser
 	    std::function<bool(const char *)>>::type
 	make_check_function(T &x)
 	{
-		const auto px = &x;
-		return [px](const char *arg) {
+		return [&x](const char *arg) {
 			char *end;
 			errno = 0;
-			*px = strtod(arg, &end);
-			if (errno != 0 || end == arg)
-				return false;
-			return true;
+			const double v = strtod(arg, &end);
+			if (errno == 0 && *end == '\0') {
+				x = v;
+				return true;
+			}
+			return false;
 		};
 	}
 
@@ -60,30 +47,30 @@ class parser
 	    std::function<bool(const char *)>>::type
 	make_check_function(T &x)
 	{
-		const auto px = &x;
-		return [px](const char *arg) {
+		return [&x](const char *arg) {
 			char *end;
-			*px = strtol(arg, &end, 0);
-			if (*end != '\0') // not all of the string has been consumed
-				return false;
-			return true;
+			errno = 0;
+			const long v = strtol(arg, &end, 0);
+			if (errno == 0 && *end == '\0') {
+				x = v;
+				return true;
+			}
+			return false;
 		};
 	}
 
 	/* specialised for std::strings */
-	std::function<bool(const char *)> make_check_function(std::string &x)
+	inline std::function<bool(const char *)> make_check_function(std::string &x)
 	{
-		const auto px = &x;
-		return [px](const char *arg) { *px = arg; return true; };
+		return [&x](const char *arg) { x = arg; return true; };
 	}
 
 	/* specialised for file-streams */
-	std::function<bool(const char *)> make_check_function(std::ifstream &x)
+	inline std::function<bool(const char *)> make_check_function(std::ifstream &x)
 	{
-		const auto px = &x;
-		return [px](const char *arg) {
-			*px = std::ifstream{arg};
-			return px->good();
+		return [&x](const char *arg) {
+			x = std::ifstream{arg};
+			return x.good();
 		};
 	}
 
@@ -91,25 +78,22 @@ class parser
 	template<typename T>
 	std::function<bool(const char *)> make_check_function(std::pair<T, std::string> &x)
 	{
-		const auto px = &x;
-		return [px](const char *arg) {
-			px->second = arg;
-			px->first = T{arg};
-			return px->first.good();
+		return [&x](const char *arg) {
+			x = {T{arg}, arg};
+			return x.first.good();
 		};
 	}
 
 	/* specialised for vectors with string */
-	std::function<bool(const char *)> make_check_function(std::vector<std::string> &x)
+	inline std::function<bool(const char *)> make_check_function(std::vector<std::string> &x)
 	{
-		const auto px = &x;
-		return [px](const char *arg) {
+		return [&x](const char *arg) {
 			std::stringstream s;
 			s.str(arg);
 			std::string val;
 
 			while (getline(s, val, ','))
-				px->push_back(val);
+				x.push_back(val);
 
 			return true;
 		};
@@ -120,15 +104,14 @@ class parser
 	          typename = typename std::enable_if<std::is_arithmetic<T>::value, T>::type>
 	std::function<bool(const char *)> make_check_function(std::vector<T> &x)
 	{
-		const auto px = &x;
-		return [px](const char *arg) {
+		return [&x](const char *arg) {
 			std::stringstream s;
 			s.str(arg);
 			std::string val;
 
 			while (getline(s, val, ',')) {
 				try {
-					px->push_back(std::stoi(val));
+					x.push_back(std::stoi(val));
 				} catch (std::exception &e) {
 					return false;
 				}
@@ -139,11 +122,20 @@ class parser
 	}
 
 	/* specialisation for bool -> set to true */
-	std::function<bool(const char *)> make_check_function(bool &x)
+	inline std::function<bool(const char *)> make_check_function(bool &x)
 	{
-		const auto px = &x;
-		return [px](const char *) { *px = true; return true; };
+		return [&x](const char *) { x = true; return true; };
 	}
+
+class parser
+{
+	std::vector<argp_option> options_ = {{}};                 //< argp-option-vector
+	std::map<int, std::function<bool(const char *)>> convert_; //< conversion-function - from const char *arg to value
+	ssize_t expected_argument_count_ = 0;                      //< expected positional argument count (-1, unlimited)
+	std::vector<std::string> arguments_;                       //< positional arguments
+	std::map<int, size_t> counter_;
+	unsigned flags_ = 0;
+
 
 	//! argp-callback
 	static error_t parseoptions_(int key, char *arg, struct argp_state *state)
