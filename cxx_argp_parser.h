@@ -182,8 +182,8 @@ class parser
 	}
 
 public:
-	parser(size_t expected_argument_count_ = 0)
-	    : expected_argument_count_(expected_argument_count_) {}
+	parser(size_t expected_argument_count = 0)
+	    : expected_argument_count_(expected_argument_count) {}
 
 	// add an argp-option to the options we care about
 	template <typename T>
