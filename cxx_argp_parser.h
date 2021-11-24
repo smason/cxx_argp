@@ -93,38 +93,19 @@ namespace cxx_argp
 		};
 	}
 
-	/* specialised for vectors with string */
-	inline arg_parser make_check_function(std::vector<std::string> &x)
+	/* specialise above for vectors */
+	template<typename T>
+	inline arg_parser make_check_function(std::vector<T> &x)
 	{
-		return [&x](int, const char *arg, struct argp_state*) {
-			std::stringstream s;
-			s.str(arg);
-			std::string val;
-
-			while (getline(s, val, ','))
-				x.push_back(val);
-
-			return 0;
-		};
-	}
-
-	/* specialised for vectors with integers */
-	template <typename T,
-	          typename = typename std::enable_if<std::numeric_limits<T>::is_integer, T>::type>
-	arg_parser make_check_function(std::vector<T> &x)
-	{
-		return [&x](int, const char *arg, struct argp_state* state) {
+		return [&x](int key, const char *arg, struct argp_state* state) {
 			std::stringstream s{arg};
 			std::string val;
 			while (getline(s, val, ',')) {
-				try {
-					x.push_back(std::stol(val));
-				} catch(std::exception &err) {
-					argp_error(
-						state, "unable to interpret '%s' as an integer, %s",
-						arg, err.what());
+				T val;
+				if (make_check_function(val)(key, arg, state) != 0) {
 					return -1;
 				}
+				x.push_back(val);
 			}
 			return 0;
 		};
