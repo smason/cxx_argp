@@ -161,11 +161,6 @@ class parser
 	}
 
 protected:
-	void add_option_(const argp_option &o)
-	{
-		options_.insert(options_.end() - 1, o);
-	}
-
 	virtual error_t parseoptions_(int key, char *arg, struct argp_state *state)
 	{
 		switch (key) {
@@ -182,9 +177,9 @@ protected:
 				break;
 
 			if (arguments_.size() > (size_t) expected_argument_count_)
-				argp_failure(state, 1, 0, "too many arguments given");
+				argp_error(state, "too many arguments given");
 			else if (arguments_.size() < (size_t) expected_argument_count_)
-				argp_failure(state, 1, 0, "too few arguments given");
+				argp_error(state, "too few arguments given");
 			break;
 
 		case ARGP_KEY_ERROR:
@@ -206,16 +201,29 @@ public:
 
 	// add an argp-option to the options we care about
 	template <typename T>
-	void add_option(const argp_option &o, T &var)
+	void add_option(const argp_option &option, T &var)
 	{
-		add_option(o, make_check_function(var));
+		add_option(option, make_check_function(var));
 	}
 
-	void add_option(const argp_option &o,
+	void add_option(const argp_option &option,
 	                const arg_parser &&custom)
 	{
-		add_option_(o);
-		convert_.insert(std::make_pair(o.key, custom));
+		options_.insert(options_.end() - 1, option);
+		convert_.insert({option.key, custom});
+	}
+
+	void add_option(const argp_option &option,
+	                const std::function<bool(const char *)> &&custom)
+	{
+		options_.insert(options_.end() - 1, option);
+		convert_.insert({option.key, [custom](int key, const char *arg, struct argp_state* state) {
+			if (!custom(arg)) {
+				argp_error(state, "argument '%s' not usable for '%c'", arg, key);
+				return -1;
+			}
+			return 0;
+		}});
 	}
 
 	// processes arguments with argp_parse and evaluate standarda arguments
