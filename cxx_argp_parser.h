@@ -32,14 +32,19 @@ namespace cxx_argp
 	{
 		return [&x](int, const char *arg, struct argp_state* state) {
 			try {
-				x = std::stod(arg);
-				return 0;
+				size_t end;
+				x = std::stod(arg, &end);
+				if (arg[end] != '\0') {
+					argp_error(
+						state, "trailing characters after decimal in '%s'",
+						arg);
+				}
 			} catch(std::exception &err) {
 				argp_error(
 					state, "unable to interpret '%s' as a decimal, %s",
 					arg, err.what());
-				return -1;
 			}
+			return 0;
 		};
 	}
 
@@ -50,14 +55,19 @@ namespace cxx_argp
 	{
 		return [&x](int, const char *arg, struct argp_state* state) {
 			try {
-				x = std::stol(arg);
-				return 0;
+				size_t end;
+				x = std::stol(arg, &end);
+				if (arg[end] != '\0') {
+					argp_error(
+						state, "trailing characters after number in '%s'",
+						arg);
+				}
 			} catch(std::exception &err) {
 				argp_error(
 					state, "unable to interpret '%s' as a whole number, %s",
 					arg, err.what());
-				return -1;
 			}
+			return 0;
 		};
 	}
 
@@ -100,10 +110,10 @@ namespace cxx_argp
 	{
 		return [&x](int key, const char *arg, struct argp_state* state) {
 			std::stringstream s{arg};
-			std::string val;
-			while (getline(s, val, ',')) {
+			std::string word;
+			while (getline(s, word, ',')) {
 				T val;
-				if (make_check_function(val)(key, arg, state) != 0) {
+				if (make_check_function(val)(key, word.c_str(), state) != 0) {
 					return -1;
 				}
 				x.push_back(val);
