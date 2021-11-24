@@ -12,6 +12,7 @@
 
 #include <argp.h>
 
+#include <cctype>
 #include <exception>
 #include <fstream>
 #include <functional>
@@ -203,7 +204,11 @@ public:
 		options_.insert(options_.end() - 1, option);
 		convert_.insert({option.key, [custom](int key, const char *arg, struct argp_state* state) {
 			if (!custom(arg)) {
-				argp_error(state, "argument '%s' not usable for '%c'", arg, key);
+				if (std::isprint(key)) {
+					argp_error(state, "argument '%s' not usable for '%c'", arg, key);
+				} else {
+					argp_error(state, "argument '%s' not usable", arg);
+				}
 				return -1;
 			}
 			return 0;
